@@ -1,0 +1,102 @@
+name: Build and Test
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    name: Build and test - ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Standard build
+            build_opts: --prefix=/usr --libdir=/usr/lib64
+          - name: Documentation
+            build_opts: --prefix=/usr --libdir=/usr/lib64 --enable-docs
+            extra_pkgs: gtk-doc valadoc valadoc-devel
+            docs: yes
+          - name: Code coverage
+            build_opts: --prefix=/usr --libdir=/usr/lib64 --enable-code-coverage
+            extra_pkgs: gcovr
+            coverage: yes
+          - name: ASan
+            build_opts: --prefix=/usr --libdir=/usr/lib64 CFLAGS='-fsanitize=address -g -fno-common -U_FORTIFY_SOURCE' CXXFLAGS='-fsanitize=address -g -fno-common -U_FORTIFY_SOURCE' LDFLAGS='-fsanitize=address -g -fno-common -U_FORTIFY_SOURCE' LIBS='-ldl -lpthread'
+            extra_pkgs: libasan
+          - name: UBSan
+            build_opts: --prefix=/usr --libdir=/usr/lib64 CFLAGS='-fsanitize=undefined -g -fno-common -U_FORTIFY_SOURCE' CXXFLAGS='-fsanitize=undefined -g -fno-common -U_FORTIFY_SOURCE' LDFLAGS='-fsanitize=undefined -g -fno-common -U_FORTIFY_SOURCE' LIBS='-ldl -lpthread'
+            extra_pkgs: libubsan
+
+    container:
+      image: fedora:latest
+      options: --cap-add SYS_PTRACE
+
+    steps:
+      - name: Install dependencies
+        run: |
+          dnf -y install 'dnf-command(builddep)'
+          dnf -y builddep libskk
+          dnf -y install libtool make which gcc-c++ vala vala-devel git libxkbcommon-devel ${{ matrix.extra_pkgs }}
+          dnf -y install glibc-gconv-extra
+
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Prepare user
+        run: |
+          useradd -d "$GITHUB_WORKSPACE" user
+          chown -R user "$GITHUB_WORKSPACE"
+
+      - name: Build and test
+        shell: sudo -E -u user bash -e {0}
+        run: |
+          NOCONFIGURE=1 ./autogen.sh
+          ./configure ${{ matrix.build_opts }}
+          make V=1 && touch po/libskk.pot && make check V=1
+
+      - name: Display logs on failure
+        if: failure()
+        run: |
+          cat tests/test-suite.log || true
+          cat config.log || true
+
+      - name: Report coverage
+        if: success() && matrix.coverage == 'yes'
+        shell: sudo -E -u user bash -e {0}
+        run: |
+          gcovr --exclude tools --exclude tests --lcov coverage.lcov
+
+      - name: Upload coverage
+        if: success() && matrix.coverage == 'yes'
+        uses: coverallsapp/github-action@v2
+
+      - name: Prepare documents
+        if: success() && matrix.docs == 'yes'
+        run: |
+          mkdir -p dist/vala dist/c
+          cp -r docs/libskk/libskk/* dist/vala/
+          cp -r docs/gtk-doc/libskk/html/* dist/c/
+      - name: Upload documents as artifact
+        if: success() && matrix.docs == 'yes' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: dist/
+
+  deploy-docs:
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    permissions:
+      pages: write
+      id-token: write
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
