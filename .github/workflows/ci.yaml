@@ -16,6 +16,8 @@ jobs:
         include:
           - name: Standard build
             build_opts: --prefix=/usr --libdir=/usr/lib64
+          # NOTE: Disable doc generation to avoid valadoc segfaults.
+          # see https://bugzilla.redhat.com/show_bug.cgi?id=2417547
           # - name: Documentation
           #   build_opts: --prefix=/usr --libdir=/usr/lib64 --enable-docs
           #   extra_pkgs: gtk-doc valadoc valadoc-devel
@@ -65,24 +67,24 @@ jobs:
           cat config.log || true
 
       - name: Report coverage
-        if: success() && matrix.coverage == 'yes'
+        if: matrix.coverage == 'yes'
         shell: sudo -E -u user bash -e {0}
         run: |
           gcovr --exclude tools --exclude tests --lcov coverage.lcov
 
       - name: Upload coverage
-        if: success() && matrix.coverage == 'yes'
+        if: matrix.coverage == 'yes'
         uses: coverallsapp/github-action@v2
 
       - name: Prepare documents
-        if: success() && matrix.docs == 'yes'
+        if: matrix.docs == 'yes'
         run: |
           mkdir -p dist/vala dist/c
           cp -r docs/libskk/libskk/* dist/vala/
           cp -r docs/gtk-doc/libskk/html/* dist/c/
 
       - name: Upload documents as artifact
-        if: success() && matrix.docs == 'yes' && github.ref == 'refs/heads/master'
+        if: matrix.docs == 'yes' && github.ref == 'refs/heads/master'
         uses: actions/upload-pages-artifact@v4
         with:
           path: dist/
